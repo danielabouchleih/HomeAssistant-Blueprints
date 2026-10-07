@@ -1,0 +1,437 @@
+blueprint:
+  name: Drucker Live Activity – Countdown und Druckprozent
+  author: Daniel / ChatGPT
+  domain: automation
+  homeassistant:
+    min_version: 2026.7.0
+  description: 'Lokaler Countdown plus tatsächlicher Druckfortschritt aus einem Prozent-Sensor (0–100).
+
+    Der Countdown läuft auf iOS offline weiter. Der Balken bleibt bis zum nächsten empfangenen Update auf dem letzten
+    Sensorwert; er wird NICHT aus der Zeit berechnet.
+
+    Updates verwenden silent: true und alert_once: true. Ein erstmaliger Activity-Start kann dennoch benachrichtigen;
+    iOS darf stille Updates verzögert zustellen.
+
+    HA korrigiert die absolute Endzeit und die Druckprozent im gewählten Intervall sowie bei Statuswechseln.
+
+    Voraussetzungen: HA Core 2026.7+, aktuelle iOS Companion App, iOS 17.2+, Live Activities aktiviert.
+
+    Nur eine Automation pro Drucker/Tag aktivieren. Vor Umstellung die bestehende Activity beenden und den neuen
+    Prozent-Sensor auswählen.
+
+    Während des Countdowns ersetzt iOS die Nachricht durch die Zeit. Pause/Fehler stoppt den Timer beim Empfang
+    des Updates; offline erkennt iOS keine Statusänderung.
+
+    Vorlagen: {{ progress }}, {{ start_time }}, {{ end_time }}, {{ start_date_time }}, {{ end_date_time }}, {{ job_name
+    }}, {{ status }}, {{ device_name }}.
+
+    Bei ungültigem Prozentwert oder unbekanntem Status wird kein Anzeige-Update gesendet. Dadurch kein Rückfall
+    auf einen lokalen Timerbalken und kein erfundener 0-Prozent-Wert.
+
+    Abschluss/Abbruch entfernt die Activity auch bei ungültigen Sensorwerten. Endzeit erreicht bedeutet NICHT Druck
+    abgeschlossen.
+
+    iOS-Laufzeitgrenze: 8 Stunden je Activity. Kein garantierter lückenloser Neustart. Schriftgröße und Modellbild
+    sind nicht konfigurierbar.'
+  input:
+    sensors:
+      name: Sensoren
+      icon: mdi:printer-3d
+      input:
+        state_sensor:
+          name: Druckstatus
+          selector:
+            entity:
+              filter:
+              - domain: sensor
+        start_sensor:
+          name: Startzeit (optional)
+          description: Optionaler ISO-8601-Zeitstempel für Nachrichtenvorlagen.
+          default: []
+          selector:
+            entity:
+              filter:
+              - domain: sensor
+        end_sensor:
+          name: Voraussichtliche Endzeit
+          description: ISO-8601-Zeitstempel. Keine Restdauer verwenden.
+          selector:
+            entity:
+              filter:
+              - domain: sensor
+        job_sensor:
+          name: Dateiname / Druckauftrag (optional)
+          default: []
+          selector:
+            entity:
+              filter:
+              - domain: sensor
+        progress_sensor:
+          name: Druckfortschritt (Prozent)
+          description: 'Numerischer Prozent-Sensor von 0 bis 100. Beim CC: sensor.centauri_carbon_percent_complete.'
+          selector:
+            entity:
+              filter:
+              - domain: sensor
+    states:
+      name: Statuswerte
+      description: Ein Rohwert je Zeile; keine Anführungszeichen oder Listen-Bindestriche. Werte nicht in mehreren
+        Gruppen verwenden.
+      icon: mdi:state-machine
+      input:
+        running_states:
+          name: Druck läuft / wird fortgesetzt
+          default: 'print_started
+
+            printing
+
+            resuming
+
+            printing_recovery
+
+            recovery'
+          selector:
+            text:
+              multiline: true
+        paused_states:
+          name: Pause
+          default: 'pausing
+
+            paused
+
+            filament_unload_paused'
+          selector:
+            text:
+              multiline: true
+        error_states:
+          name: Fehler / Abbruch läuft
+          default: 'error
+
+            filament_unload_abnormal
+
+            stopping'
+          selector:
+            text:
+              multiline: true
+        completed_states:
+          name: Erfolgreich abgeschlossen – Activity entfernen
+          default: complete
+          selector:
+            text:
+              multiline: true
+        clear_states:
+          name: Abgebrochen / Leerlauf – Activity entfernen
+          default: 'stopped
+
+            idle'
+          selector:
+            text:
+              multiline: true
+    recipients:
+      name: Benachrichtigungen
+      icon: mdi:cellphone
+      input:
+        notify_services:
+          name: Mobile-App-Aktionen
+          description: YAML-Liste, z. B. [notify.mobile_app_dacs_iphone]. Weitere Smartphones als weitere Listeneinträge.
+            Ein einzelner Aktionsname als Text wird ebenfalls akzeptiert. Keine notify.send_message-Entities.
+          selector:
+            object: {}
+        activity_tag:
+          name: Feste Activity-Kennung
+          description: Pro Drucker eindeutig; nur Buchstaben, Ziffern, Bindestrich und Unterstrich, maximal 64 Zeichen.
+            Keine Task-ID verwenden.
+          default: printer_live_activity
+          selector:
+            text: {}
+        dashboard_url:
+          name: Dashboard beim Antippen
+          default: /
+          selector:
+            text: {}
+        send_completion_notification:
+          name: Zusätzliche normale Push-Nachricht bei erfolgreichem Abschluss
+          description: Nur bei beobachtetem Wechsel von einem Lauf-/Pause-/Fehlerstatus nach abgeschlossen; nicht
+            bei Run actions oder HA-Neustart.
+          default: false
+          selector:
+            boolean: {}
+    texts:
+      name: Texte und Nachrichtenvorlagen
+      icon: mdi:text
+      input:
+        device_name:
+          name: Titel / Gerätename
+          default: 3D-Drucker
+          selector:
+            text: {}
+        running_message:
+          name: Nachricht beim Drucken
+          description: Auf iOS bei laufendem Countdown normalerweise verdeckt. Für andere Darstellungen/Fallback.
+          default: Start {{ start_time }} · Ende ≈ {{ end_time }}
+          selector:
+            template: {}
+        paused_message:
+          name: Nachricht bei Pause
+          default: Pausiert · Start {{ start_time }} · Ende offen
+          selector:
+            template: {}
+        error_message:
+          name: Nachricht bei Fehler / laufendem Abbruch
+          default: Druck prüfen · {{ status }} · Ende offen
+          selector:
+            template: {}
+        completion_message:
+          name: Normale Abschlussnachricht
+          default: 'Druck abgeschlossen: {{ job_name }}'
+          selector:
+            template: {}
+        compact_message:
+          name: Kurztext für Dynamic Island
+          default: Druck läuft
+          selector:
+            template: {}
+          description: Während des Countdowns kann iOS diesen Text durch den Timer ersetzen.
+        overdue_message:
+          name: Endzeit erreicht, Druck läuft noch
+          default: Druck läuft · neue Endzeit abwarten
+          selector:
+            template: {}
+        missing_time_message:
+          name: Endzeit noch nicht verfügbar
+          default: Druck läuft · Endzeit fehlt
+          selector:
+            template: {}
+    appearance:
+      name: Darstellung
+      icon: mdi:palette
+      collapsed: true
+      input:
+        icon:
+          name: Symbol
+          default: mdi:printer-3d
+          selector:
+            icon: {}
+        icon_color:
+          name: Symbolfarbe (Hex)
+          default: '#03A9F4'
+          selector:
+            text: {}
+        bar_color:
+          name: Fortschrittsbalken (Hex)
+          default: '#03A9F4'
+          selector:
+            text: {}
+        custom_background:
+          name: Eigene Hintergrund- und Textfarbe verwenden
+          default: false
+          selector:
+            boolean: {}
+        background_color:
+          name: Hintergrundfarbe (Hex)
+          default: '#101820'
+          selector:
+            text: {}
+        text_color:
+          name: Textfarbe (Hex)
+          default: '#FFFFFF'
+          selector:
+            text: {}
+        bar_direction:
+          name: Richtung des Prozentbalkens
+          description: 'increasing: zeigt erreichte Druckprozent; decreasing: zeigt verbleibenden Anteil. Kein lokal
+            berechneter Zeitbalken.'
+          default: increasing
+          selector:
+            select:
+              options:
+              - increasing
+              - decreasing
+    timing:
+      name: Aktualisierung
+      icon: mdi:timer-outline
+      collapsed: true
+      input:
+        update_pattern:
+          name: Regelmäßiges Update (Minuten)
+          description: HA gleicht die Endzeit im gewählten Intervall sowie bei Statuswechseln ab. Der Timer läuft
+            auf iOS dazwischen lokal weiter. Kein garantierter sofortiger Abgleich bei Wiederverbindung.
+          default: /5
+          selector:
+            select:
+              options:
+              - /1
+              - /2
+              - /5
+              - /10
+              - /15
+              - /30
+        settle_seconds:
+          name: Wartezeit zum Zusammenfassen von Statuswechseln
+          description: Sensoren werden erst danach gelesen. Währenddessen starten keine parallelen Aufrufe.
+          default: 20
+          selector:
+            number:
+              min: 1
+              max: 60
+              unit_of_measurement: s
+              mode: box
+mode: single
+max_exceeded: silent
+triggers:
+- trigger: state
+  entity_id: !input 'state_sensor'
+  from: null
+  id: status
+- trigger: time_pattern
+  minutes: !input 'update_pattern'
+  id: tick
+- trigger: homeassistant
+  event: start
+  id: startup
+conditions: []
+actions:
+- delay:
+    seconds: !input 'settle_seconds'
+- variables:
+    state_entity: !input 'state_sensor'
+    start_entity: !input 'start_sensor'
+    end_entity: !input 'end_sensor'
+    job_entity: !input 'job_sensor'
+    running_input: !input 'running_states'
+    paused_input: !input 'paused_states'
+    errors_input: !input 'error_states'
+    completed_input: !input 'completed_states'
+    clear_input: !input 'clear_states'
+    services_input: !input 'notify_services'
+    tag: !input 'activity_tag'
+    device_name: !input 'device_name'
+    url: !input 'dashboard_url'
+    chosen_icon: !input 'icon'
+    chosen_icon_color: !input 'icon_color'
+    chosen_bar_color: !input 'bar_color'
+    use_background: !input 'custom_background'
+    chosen_background: !input 'background_color'
+    chosen_text_color: !input 'text_color'
+    send_completion: !input 'send_completion_notification'
+    direction: !input 'bar_direction'
+    progress_entity: !input 'progress_sensor'
+- variables:
+    running: '{{ running_input.splitlines() | map(''trim'') | map(''lower'') | reject(''equalto'', '''') | list
+      }}'
+    paused: '{{ paused_input.splitlines() | map(''trim'') | map(''lower'') | reject(''equalto'', '''') | list }}'
+    errors: '{{ errors_input.splitlines() | map(''trim'') | map(''lower'') | reject(''equalto'', '''') | list }}'
+    completed: '{{ completed_input.splitlines() | map(''trim'') | map(''lower'') | reject(''equalto'', '''') | list
+      }}'
+    cleared: '{{ clear_input.splitlines() | map(''trim'') | map(''lower'') | reject(''equalto'', '''') | list }}'
+    services: '{{ [services_input | trim] if services_input is string else services_input }}'
+    status: '{{ states(state_entity) | lower | trim }}'
+    start_stamp: '{{ as_timestamp(states(start_entity), none) if start_entity else none }}'
+    end_stamp: '{{ as_timestamp(states(end_entity), none) if end_entity else none }}'
+    job_name: '{% set name = states(job_entity) if job_entity else '''' %} {{ name if name not in ['''', ''unknown'',
+      ''unavailable'', ''none''] else ''Druckauftrag'' }}'
+    previous_status: "{% if trigger is defined and trigger.id | default('') == 'status' and trigger.from_state is\
+      \ not none %}\n  {{ trigger.from_state.state | lower | trim }}\n{% else %}unknown{% endif %}"
+    now_stamp: '{{ as_timestamp(now()) }}'
+    progress_raw: '{{ states(progress_entity) }}'
+- variables:
+    start_time: '{{ start_stamp | timestamp_custom(''%H:%M'', true) if start_stamp is not none else ''–'' }}'
+    start_date_time: '{{ start_stamp | timestamp_custom(''%d.%m. %H:%M'', true) if start_stamp is not none else
+      ''–'' }}'
+    end_date_time: '{{ end_stamp | timestamp_custom(''%d.%m. %H:%M'', true) if end_stamp is not none else ''–''
+      }}'
+    end_time: "{% if end_stamp is none %}– {% elif end_stamp | timestamp_custom('%Y-%m-%d', true) == now().strftime('%Y-%m-%d')\
+      \ %}\n  {{ end_stamp | timestamp_custom('%H:%M', true) }}\n{% else %}{{ end_stamp | timestamp_custom('%d.%m.\
+      \ %H:%M', true) }}{% endif %}"
+    timer_active: '{{ status in running and end_stamp is not none and end_stamp > now_stamp }}'
+    progress: '{{ [0, [progress_raw | float | round(0) | int, 100] | min] | max if is_number(progress_raw) else
+      none }}'
+- choose:
+  - alias: Activity entfernen
+    conditions:
+    - condition: template
+      value_template: '{{ status in completed + cleared }}'
+    - condition: template
+      value_template: '{{ trigger is not defined or trigger.id | default(''manual'') != ''tick'' }}'
+    sequence:
+    - repeat:
+        for_each: '{{ services }}'
+        sequence:
+        - action: '{{ repeat.item }}'
+          continue_on_error: true
+          data:
+            message: clear_notification
+            data:
+              tag: '{{ tag }}'
+    - if:
+      - condition: template
+        value_template: '{{ send_completion and status in completed and previous_status in running + paused + errors
+          }}'
+      then:
+      - variables:
+          completion_body: !input 'completion_message'
+      - repeat:
+          for_each: '{{ services }}'
+          sequence:
+          - action: '{{ repeat.item }}'
+            continue_on_error: true
+            data:
+              title: '{{ device_name }}'
+              message: '{{ completion_body.split() | join('' '') }}'
+              data:
+                tag: '{{ tag }}_done'
+                url: '{{ url }}'
+  - alias: Live Activity starten oder aktualisieren
+    conditions:
+    - condition: template
+      value_template: '{{ status in running + paused + errors and progress is not none }}'
+    sequence:
+    - variables:
+        body: ''
+    - choose:
+      - conditions: '{{ status in paused }}'
+        sequence:
+        - variables:
+            body: !input 'paused_message'
+      - conditions: '{{ status in errors }}'
+        sequence:
+        - variables:
+            body: !input 'error_message'
+      - conditions: '{{ end_stamp is none }}'
+        sequence:
+        - variables:
+            body: !input 'missing_time_message'
+      - conditions: '{{ end_stamp <= now_stamp }}'
+        sequence:
+        - variables:
+            body: !input 'overdue_message'
+      default:
+      - variables:
+          body: !input 'running_message'
+    - variables:
+        compact: !input 'compact_message'
+        base_payload: '{{ dict(tag=tag, live_update=true, chronometer=timer_active,
+
+          progress=progress, progress_max=100, silent=true,
+
+          critical_text=compact, alert_once=true, notification_icon=chosen_icon,
+
+          notification_icon_color=chosen_icon_color, progress_bar_color=chosen_bar_color,
+
+          progress_bar_direction=direction, url=url) }}'
+    - variables:
+        timer_payload: '{{ dict(base_payload, when=end_stamp | int, when_relative=false) if timer_active else base_payload
+          }}'
+    - variables:
+        payload: '{{ dict(timer_payload, background_color=chosen_background, text_color=chosen_text_color) if use_background
+          else timer_payload }}'
+    - repeat:
+        for_each: '{{ services }}'
+        sequence:
+        - action: '{{ repeat.item }}'
+          continue_on_error: true
+          data:
+            title: '{{ device_name }}'
+            message: '{{ body.split() | join('' '') }}'
+            data: '{{ payload }}'
+  default: []
