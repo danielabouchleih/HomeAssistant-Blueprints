@@ -1,38 +1,38 @@
 blueprint:
-  name: Drucker Live Activity – lokaler Countdown
+  name: Drucker Live Activity – Countdown und Druckprozent
   author: Daniel / ChatGPT
   domain: automation
   homeassistant:
     min_version: 2026.7.0
-  description: 'Lokaler iOS-Countdown und automatisch laufender Zeitbalken, ohne Prozent-Sensor.
+  description: 'Lokaler Countdown plus tatsächlicher Druckfortschritt aus einem Prozent-Sensor (0–100).
 
-    HA sendet die absolute erwartete Endzeit; iOS zählt auch ohne Verbindung weiter.
+    Der Countdown läuft auf iOS offline weiter. Der Balken bleibt bis zum nächsten empfangenen Update auf dem letzten
+    Sensorwert; er wird NICHT aus der Zeit berechnet.
 
-    Nach dem nächsten empfangenen HA-Update gilt die korrigierte Endzeit.
+    Updates verwenden silent: true und alert_once: true. Ein erstmaliger Activity-Start kann dennoch benachrichtigen;
+    iOS darf stille Updates verzögert zustellen.
 
-    Der Zeitbalken basiert auf dem Countdown-Intervall der App, NICHT zuverlässig auf der gesamten Druckdauer seit
-    Beginn. Er kann bei Updates/Neudarstellung neu ansetzen. Keine echte oder interpolierte Druckprozentanzeige.
+    HA korrigiert die absolute Endzeit und die Druckprozent im gewählten Intervall sowie bei Statuswechseln.
 
-    Voraussetzungen: HA Core 2026.7+, aktuelle iOS Companion App, iOS 17.2+, Live Activities aktiviert. Die Richtung
-    des Balkens setzt Unterstützung von progress_bar_direction in der App voraus.
+    Voraussetzungen: HA Core 2026.7+, aktuelle iOS Companion App, iOS 17.2+, Live Activities aktiviert.
 
-    Nur eine Automation pro Drucker/Tag aktivieren. Vor Umstellung alte Automation deaktivieren und bestehende Activity
-    in der App beenden.
+    Nur eine Automation pro Drucker/Tag aktivieren. Vor Umstellung die bestehende Activity beenden und den neuen
+    Prozent-Sensor auswählen.
 
-    Während des Countdowns ersetzt iOS die Nachricht durch die Zeit. Nachrichten bleiben für Pause, Fehler, fehlende/überschrittene
-    Endzeit und optionale Abschluss-Push konfigurierbar.
+    Während des Countdowns ersetzt iOS die Nachricht durch die Zeit. Pause/Fehler stoppt den Timer beim Empfang
+    des Updates; offline erkennt iOS keine Statusänderung.
 
-    Vorlagen: {{ start_time }}, {{ end_time }}, {{ start_date_time }}, {{ end_date_time }}, {{ job_name }}, {{ status
-    }}, {{ device_name }}. Kein {{ progress }}.
+    Vorlagen: {{ progress }}, {{ start_time }}, {{ end_time }}, {{ start_date_time }}, {{ end_date_time }}, {{ job_name
+    }}, {{ status }}, {{ device_name }}.
 
-    Pause/Fehler stoppt den Countdown beim Empfang des Updates; offline kann eine Pause nicht erkannt werden.
+    Bei ungültigem Prozentwert oder unbekanntem Status wird kein Anzeige-Update gesendet. Dadurch kein Rückfall
+    auf einen lokalen Timerbalken und kein erfundener 0-Prozent-Wert.
 
-    Bei unbekanntem Status bleibt die letzte Anzeige. Endzeit erreicht bedeutet NICHT Druck abgeschlossen: Online
-    wird dann eine Warnmeldung angezeigt, offline kann der native Timer aufwärts zählen.
+    Abschluss/Abbruch entfernt die Activity auch bei ungültigen Sensorwerten. Endzeit erreicht bedeutet NICHT Druck
+    abgeschlossen.
 
-    iOS-Laufzeitgrenze: 8 Stunden je Activity. Kein garantierter lückenloser Neustart.
-
-    Schriftgröße und Modellbild sind über diese Schnittstelle nicht einstellbar.'
+    iOS-Laufzeitgrenze: 8 Stunden je Activity. Kein garantierter lückenloser Neustart. Schriftgröße und Modellbild
+    sind nicht konfigurierbar.'
   input:
     sensors:
       name: Sensoren
@@ -46,8 +46,7 @@ blueprint:
               - domain: sensor
         start_sensor:
           name: Startzeit (optional)
-          description: Optionaler ISO-8601-Zeitstempel für Nachrichtenvorlagen; nicht die Startbasis des nativen
-            Balkens.
+          description: Optionaler ISO-8601-Zeitstempel für Nachrichtenvorlagen.
           default: []
           selector:
             entity:
@@ -63,6 +62,13 @@ blueprint:
         job_sensor:
           name: Dateiname / Druckauftrag (optional)
           default: []
+          selector:
+            entity:
+              filter:
+              - domain: sensor
+        progress_sensor:
+          name: Druckfortschritt (Prozent)
+          description: 'Numerischer Prozent-Sensor von 0 bis 100. Beim CC: sensor.centauri_carbon_percent_complete.'
           selector:
             entity:
               filter:
@@ -232,9 +238,9 @@ blueprint:
           selector:
             text: {}
         bar_direction:
-          name: Richtung des lokalen Zeitbalkens
-          description: 'increasing: füllt sich; decreasing: Restzeitbalken leert sich. Kein Gesamtfortschritt in
-            Prozent.'
+          name: Richtung des Prozentbalkens
+          description: 'increasing: zeigt erreichte Druckprozent; decreasing: zeigt verbleibenden Anteil. Kein lokal
+            berechneter Zeitbalken.'
           default: increasing
           selector:
             select:
@@ -309,6 +315,7 @@ actions:
     chosen_text_color: !input 'text_color'
     send_completion: !input 'send_completion_notification'
     direction: !input 'bar_direction'
+    progress_entity: !input 'progress_sensor'
 - variables:
     running: '{{ running_input.splitlines() | map(''trim'') | map(''lower'') | reject(''equalto'', '''') | list
       }}'
@@ -326,6 +333,7 @@ actions:
     previous_status: "{% if trigger is defined and trigger.id | default('') == 'status' and trigger.from_state is\
       \ not none %}\n  {{ trigger.from_state.state | lower | trim }}\n{% else %}unknown{% endif %}"
     now_stamp: '{{ as_timestamp(now()) }}'
+    progress_raw: '{{ states(progress_entity) }}'
 - variables:
     start_time: '{{ start_stamp | timestamp_custom(''%H:%M'', true) if start_stamp is not none else ''–'' }}'
     start_date_time: '{{ start_stamp | timestamp_custom(''%d.%m. %H:%M'', true) if start_stamp is not none else
@@ -336,6 +344,8 @@ actions:
       \ %}\n  {{ end_stamp | timestamp_custom('%H:%M', true) }}\n{% else %}{{ end_stamp | timestamp_custom('%d.%m.\
       \ %H:%M', true) }}{% endif %}"
     timer_active: '{{ status in running and end_stamp is not none and end_stamp > now_stamp }}'
+    progress: '{{ [0, [progress_raw | float | round(0) | int, 100] | min] | max if is_number(progress_raw) else
+      none }}'
 - choose:
   - alias: Activity entfernen
     conditions:
@@ -374,7 +384,7 @@ actions:
   - alias: Live Activity starten oder aktualisieren
     conditions:
     - condition: template
-      value_template: '{{ status in running + paused + errors }}'
+      value_template: '{{ status in running + paused + errors and progress is not none }}'
     sequence:
     - variables:
         body: ''
@@ -401,6 +411,8 @@ actions:
     - variables:
         compact: !input 'compact_message'
         base_payload: '{{ dict(tag=tag, live_update=true, chronometer=timer_active,
+
+          progress=progress, progress_max=100, silent=true,
 
           critical_text=compact, alert_once=true, notification_icon=chosen_icon,
 

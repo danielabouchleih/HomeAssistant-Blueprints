@@ -1,5 +1,5 @@
-alias: Centauri Carbon – Lokaler Countdown
-description: Lokaler Countdown, Zeitbalken, HA-Endzeitabgleich
+alias: Centauri Carbon – Countdown und Druckprozent
+description: Lokaler Countdown plus echte Druckprozent, stille Updates
 use_blueprint:
   path: custom/printer_live_activity_local.yaml
   input:
@@ -46,3 +46,4 @@ use_blueprint:
     update_pattern: /5
     settle_seconds: 20
     bar_direction: increasing
+    progress_sensor: sensor.centauri_carbon_percent_complete
