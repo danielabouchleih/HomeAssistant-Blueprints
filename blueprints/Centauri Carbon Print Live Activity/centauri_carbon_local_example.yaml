@@ -1,0 +1,48 @@
+alias: Centauri Carbon – Lokaler Countdown
+description: Lokaler Countdown, Zeitbalken, HA-Endzeitabgleich
+use_blueprint:
+  path: custom/printer_live_activity_local.yaml
+  input:
+    state_sensor: sensor.centauri_carbon_druckstatus
+    start_sensor: sensor.centauri_carbon_begin_time
+    end_sensor: sensor.centauri_carbon_end_time
+    job_sensor: sensor.centauri_carbon_file_name
+    device_name: Centauri Carbon
+    notify_services:
+    - notify.mobile_app_dacs_iphone
+    activity_tag: centauri_carbon_live_activity
+    dashboard_url: /3d-drucker/centauri-carbon
+    running_states: 'print_started
+
+      printing
+
+      resuming
+
+      printing_recovery
+
+      recovery'
+    paused_states: 'pausing
+
+      paused
+
+      filament_unload_paused'
+    error_states: 'error
+
+      filament_unload_abnormal
+
+      stopping'
+    completed_states: complete
+    clear_states: 'stopped
+
+      idle'
+    running_message: Start {{ start_time }} · Ende ≈ {{ end_time }}
+    paused_message: Pausiert · Start {{ start_time }} · Ende offen
+    error_message: Druck prüfen · {{ status }} · Ende offen
+    compact_message: Druck läuft
+    send_completion_notification: false
+    icon: mdi:printer-3d
+    icon_color: '#03A9F4'
+    bar_color: '#03A9F4'
+    update_pattern: /5
+    settle_seconds: 20
+    bar_direction: increasing
